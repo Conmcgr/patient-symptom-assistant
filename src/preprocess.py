@@ -18,5 +18,9 @@ df.drop_duplicates(inplace=True)
 print(df.head())
 print(df['output'].value_counts())
 
-df.to_json('../data/cleaned/data.jsonl', orient='records')
+train_df = df.sample(frac=0.9, random_state=42)  # 90% train
+val_df = df.drop(train_df.index)  # 10% validation
+
+train_df.to_json('../data/cleaned/train.jsonl', orient='records', lines=True)
+val_df.to_json('../data/cleaned/val.jsonl', orient='records', lines=True)
 
