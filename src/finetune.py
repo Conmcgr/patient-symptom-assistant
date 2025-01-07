@@ -21,3 +21,51 @@ validation_data = tokenized_data["validation"]
 
 training_loader = DataLoader(training_data, batch_size=8, shuffle=True)
 validation_loader = DataLoader(validation_data, batch_size=8)
+
+model = GPT2LMHeadModel.from_pretrained("gpt2")
+lora_config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    inference_mode=False,
+    r=8,
+    lora_alpha=32,
+    lora_dropout=0.1
+)
+model = get_peft_model(model, lora_config)
+optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+for epoch in range(3):
+    model.train()
+    train_loss = 0
+    for batch in training_loader:
+        input_ids = batch["input_ids"].to(device)
+        labels = batch["labels"].to(device)
+
+        outputs = model(input_ids=input_ids, labels=labels)
+        loss = outputs.loss
+        train_loss += loss.item()
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    avg_train_loss = train_loss / len(training_loader)
+    print(f"Epoch {epoch + 1}: Average Training Loss = {avg_train_loss:.4f}")
+
+    model.eval()
+    val_loss = 0
+    with torch.no_grad():
+        for batch in validation_loader:
+            input_ids = batch["input_ids"].to(device)
+            labels = batch["labels"].to(device)
+
+            outputs = model(input_ids=input_ids, labels=labels)
+            loss = outputs.loss
+            val_loss += loss.item()
+
+    avg_val_loss = val_loss / len(validation_loader)
+    print(f"Epoch {epoch + 1}: Average Validation Loss = {avg_val_loss:.4f}")
+
+model.save_pretrained("../models/lora_adapter")
