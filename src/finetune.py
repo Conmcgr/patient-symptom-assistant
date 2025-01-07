@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 from peft import get_peft_model, LoraConfig, TaskType
 from datasets import load_dataset
@@ -36,6 +37,8 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 
+writer = SummaryWriter(log_dir="./logs")
+
 for epoch in range(3):
     model.train()
     train_loss = 0
@@ -53,6 +56,7 @@ for epoch in range(3):
 
     avg_train_loss = train_loss / len(training_loader)
     print(f"Epoch {epoch + 1}: Average Training Loss = {avg_train_loss:.4f}")
+    writer.add_scalar("Loss/Train", avg_train_loss, epoch)
 
     model.eval()
     val_loss = 0
@@ -67,5 +71,6 @@ for epoch in range(3):
 
     avg_val_loss = val_loss / len(validation_loader)
     print(f"Epoch {epoch + 1}: Average Validation Loss = {avg_val_loss:.4f}")
+    writer.add_scalar("Loss/Validation", avg_val_loss, epoch)
 
 model.save_pretrained("../models/lora_adapter")
