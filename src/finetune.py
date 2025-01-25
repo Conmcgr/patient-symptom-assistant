@@ -37,7 +37,7 @@ def tokenize(batch):
         batch["output"], 
         truncation=True, 
         padding="max_length", 
-        max_length=32
+        max_length=128  # Make this the same as input length
     )
     
     return {
@@ -54,6 +54,9 @@ def collate_fn(batch):
     input_ids = torch.tensor([item['input_ids'] for item in batch])
     attention_mask = torch.tensor([item['attention_mask'] for item in batch])
     labels = torch.tensor([item['labels'] for item in batch])
+    
+    labels = torch.where(labels != tokenizer.pad_token_id, labels, -100)
+    
     return {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
