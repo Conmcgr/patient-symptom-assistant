@@ -1,197 +1,217 @@
-import torch
-from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from peft import get_peft_model, LoraConfig, TaskType
-from datasets import load_dataset
-from tqdm import tqdm
 import os
+import torch
+import numpy as np
+from datasets import load_dataset
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    Trainer,
+    TrainingArguments,
+    DataCollatorForSeq2Seq,
+    EarlyStoppingCallback
+)
+from peft import (
+    get_peft_model,
+    LoraConfig,
+    TaskType,
+    prepare_model_for_kbit_training
+)
+import evaluate
+from tqdm import tqdm
+import argparse
 
-# Setup paths
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-training_file = os.path.join(PROJECT_ROOT, "data", "cleaned", "train.jsonl")
-validation_file = os.path.join(PROJECT_ROOT, "data", "cleaned", "val.jsonl")
-MODEL_SAVE_PATH = os.path.join(PROJECT_ROOT, "models", "lora_adapter")
-LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
+parser = argparse.ArgumentParser(description="Fine-tune a medical diagnosis model")
+parser.add_argument("--base_model", type=str, default="microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext", 
+                    help="Base model to use for fine-tuning")
+parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
+parser.add_argument("--batch_size", type=int, default=8, help="Training batch size")
+parser.add_argument("--learning_rate", type=float, default=2e-5, help="Learning rate")
+parser.add_argument("--max_length", type=int, default=512, help="Maximum sequence length")
+parser.add_argument("--lora_r", type=int, default=16, help="LoRA attention dimension")
+parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha parameter")
+parser.add_argument("--lora_dropout", type=float, default=0.1, help="LoRA dropout rate")
+parser.add_argument("--eval_steps", type=int, default=100, help="Evaluation steps")
+parser.add_argument("--save_steps", type=int, default=100, help="Save checkpoint steps")
+parser.add_argument("--warmup_steps", type=int, default=100, help="Learning rate warmup steps")
+parser.add_argument("--gradient_accumulation_steps", type=int, default=4, help="Gradient accumulation steps")
+parser.add_argument("--use_8bit", action="store_true", help="Use 8-bit quantization for training")
+parser.add_argument("--use_4bit", action="store_true", help="Use 4-bit quantization for training")
+parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
-# Create directories
-os.makedirs(MODEL_SAVE_PATH, exist_ok=True)
-os.makedirs(LOG_DIR, exist_ok=True)
+args = parser.parse_args([])
 
-def save_model(model, tokenizer, lora_config, path):
-    os.makedirs(path, exist_ok=True)
-    
-    # Save the model state
-    model.save_pretrained(path)
-    
-    # Save the adapter config explicitly
-    config_path = os.path.join(path, "adapter_config.json")
-    lora_config.save_pretrained(path)
-    
-    # Save tokenizer
-    tokenizer.save_pretrained(path)
+torch.manual_seed(args.seed)
+np.random.seed(args.seed)
 
-# Load dataset
-data = load_dataset("json", data_files={"train": training_file, "validation": validation_file})
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+data_dir = os.path.join(project_root, "data", "cleaned")
+model_dir = os.path.join(project_root, "models")
+output_dir = os.path.join(model_dir, "medical_diagnosis_model")
 
-# Initialize tokenizer with correct settings
-tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-tokenizer.pad_token = tokenizer.eos_token
-tokenizer.padding_side = 'left'  # Set padding to left side for generation
+os.makedirs(output_dir, exist_ok=True)
 
-# Initialize model
-model = GPT2LMHeadModel.from_pretrained("gpt2")
-model.config.pad_token_id = model.config.eos_token_id
-model.resize_token_embeddings(len(tokenizer))
+print("Loading datasets...")
+data_files = {
+    "train": os.path.join(data_dir, "train.jsonl"),
+    "validation": os.path.join(data_dir, "val.jsonl"),
+    "test": os.path.join(data_dir, "test.jsonl")
+}
+dataset = load_dataset("json", data_files=data_files)
 
-def tokenize(batch):
-    # Tokenize inputs
-    inputs = tokenizer(
-        batch["input"],
-        truncation=True,
-        padding="max_length",
-        max_length=128,
-        return_attention_mask=True
-    )
-    
-    # Tokenize outputs and shift them for GPT2 training
-    with tokenizer.as_target_tokenizer():
-        outputs = tokenizer(
-            batch["output"],
-            truncation=True,
-            padding="max_length",
-            max_length=128  # Make this match input length
-        )
-    
-    # Create labels with -100 for input tokens
-    labels = [-100] * len(inputs["input_ids"])  # Initialize with -100
-    labels[-len(outputs["input_ids"]):] = outputs["input_ids"]  # Add output tokens at the end
-    
-    return {
-        "input_ids": inputs["input_ids"],
-        "attention_mask": inputs["attention_mask"],
-        "labels": labels
-    }
+print(f"Loading base model: {args.base_model}")
+model_kwargs = {}
+if args.use_8bit:
+    model_kwargs["load_in_8bit"] = True
+elif args.use_4bit:
+    model_kwargs["load_in_4bit"] = True
+    model_kwargs["bnb_4bit_compute_dtype"] = torch.float16
 
-def collate_fn(batch):
-    input_ids = torch.tensor([item['input_ids'] for item in batch])
-    attention_mask = torch.tensor([item['attention_mask'] for item in batch])
-    labels = torch.tensor([item['labels'] for item in batch])
-    
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "labels": labels
-    }
+tokenizer = AutoTokenizer.from_pretrained(args.base_model)
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
 
-# Update LoRA config
-lora_config = LoraConfig(
+model = AutoModelForCausalLM.from_pretrained(
+    args.base_model,
+    **model_kwargs
+)
+
+if args.use_8bit or args.use_4bit:
+    model = prepare_model_for_kbit_training(model)
+
+peft_config = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
     inference_mode=False,
-    r=8,
-    lora_alpha=32,
-    lora_dropout=0.1,
-    target_modules=["c_attn", "c_proj"],
-    fan_in_fan_out=True  # Add this to address the warning
+    r=args.lora_r,
+    lora_alpha=args.lora_alpha,
+    lora_dropout=args.lora_dropout,
+    target_modules=["query", "key", "value", "dense"],
 )
 
+model = get_peft_model(model, peft_config)
+model.print_trainable_parameters()
 
-
-# Process data
-tokenized_data = data.map(tokenize, batched=True)
-training_data = tokenized_data["train"]
-validation_data = tokenized_data["validation"]
-
-# Setup data loaders
-BATCH_SIZE = 8
-training_loader = DataLoader(
-    training_data, 
-    batch_size=BATCH_SIZE, 
-    shuffle=True, 
-    collate_fn=collate_fn
-)
-validation_loader = DataLoader(
-    validation_data, 
-    batch_size=BATCH_SIZE, 
-    collate_fn=collate_fn
-)
-
-def check_data_sample(data_loader, tokenizer):
-    """Print a few examples to verify data formatting"""
-    batch = next(iter(data_loader))
-    for i in range(min(3, len(batch['input_ids']))):
-        print("\nExample", i+1)
-        print("Input:", tokenizer.decode(batch['input_ids'][i], skip_special_tokens=True))
-        # Find where labels start (first non -100 value)
-        label_start = [j for j, x in enumerate(batch['labels'][i]) if x != -100][0]
-        print("Expected Output:", tokenizer.decode(batch['labels'][i][label_start:], skip_special_tokens=True))
-        print("-" * 50)
-
-print("\nChecking training data samples:")
-check_data_sample(training_loader, tokenizer)
-
-# Initialize model with LoRA
-model = get_peft_model(model, lora_config)
-optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
-
-# Setup device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
-
-# Training loop
-writer = SummaryWriter(log_dir=LOG_DIR)
-best_loss = float('inf')
-NUM_EPOCHS = 5
-
-if device.type == "cpu":
-    print("Training on CPU. Reducing batch size and learning rate for stability.")
-    global BATCH_SIZE, optimizer
-    BATCH_SIZE = 2
-    training_loader = DataLoader(training_data, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
-
-for epoch in range(NUM_EPOCHS):
-    # Training phase
-    model.train()
-    train_loss = 0
-    train_pbar = tqdm(training_loader, desc=f'Training Epoch {epoch + 1}')
+def preprocess_function(examples):
+    prompts = [
+        f"{instruction}\n\nSymptoms: {input_text}\n\nDiagnosis:" 
+        for instruction, input_text in zip(examples["instruction"], examples["input"])
+    ]
     
-    for batch in train_pbar:
-        input_ids = batch["input_ids"].to(device)
-        attention_mask = batch["attention_mask"].to(device)
-        labels = batch["labels"].to(device)
-
-        outputs = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels
-        )
-        
-        loss = outputs.loss
-        if torch.isnan(loss) or torch.isinf(loss):
-            print("WARNING: Skipping batch due to nan or inf loss.")
-            continue
-        train_loss += loss.item()
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        train_pbar.set_postfix({'loss': loss.item()})
-
-    avg_train_loss = train_loss / len(training_loader)
-    print(f"\nEpoch {epoch + 1}: Average Training Loss = {avg_train_loss:.4f}")
-    writer.add_scalar("Loss/Train", avg_train_loss, epoch)
+    targets = [f" {output}" for output in examples["output"]]
     
-    # Save model if loss improved
-    if avg_train_loss < best_loss:
-        best_loss = avg_train_loss
-        save_model(model, tokenizer, lora_config, os.path.join(MODEL_SAVE_PATH, "best_model"))
-        print(f"Saved model with loss: {best_loss:.4f}")
+    model_inputs = tokenizer(
+        prompts,
+        max_length=args.max_length,
+        padding="max_length",
+        truncation=True,
+    )
+    
+    labels = tokenizer(
+        targets,
+        max_length=args.max_length,
+        padding="max_length",
+        truncation=True,
+    )
+    
+    labels["input_ids"] = [
+        [(l if l != tokenizer.pad_token_id else -100) for l in label] 
+        for label in labels["input_ids"]
+    ]
+    
+    model_inputs["labels"] = labels["input_ids"]
+    return model_inputs
 
-# Save final model
-save_model(model, tokenizer, lora_config, os.path.join(MODEL_SAVE_PATH, "final_model"))
-writer.close()
+print("Processing datasets...")
+tokenized_datasets = dataset.map(
+    preprocess_function,
+    batched=True,
+    remove_columns=dataset["train"].column_names,
+)
 
+data_collator = DataCollatorForSeq2Seq(
+    tokenizer=tokenizer,
+    model=model,
+    padding="max_length",
+    max_length=args.max_length,
+)
 
+rouge = evaluate.load("rouge")
+bleu = evaluate.load("bleu")
 
+def compute_metrics(eval_preds):
+    preds, labels = eval_preds
+    
+    labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+    
+    decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+    decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+    
+    rouge_output = rouge.compute(
+        predictions=decoded_preds, 
+        references=decoded_labels, 
+        use_stemmer=True
+    )
+    
+    bleu_output = bleu.compute(
+        predictions=decoded_preds,
+        references=[[label] for label in decoded_labels]
+    )
+    
+    results = {
+        "bleu": bleu_output["bleu"],
+        "rouge1": rouge_output["rouge1"],
+        "rouge2": rouge_output["rouge2"],
+        "rougeL": rouge_output["rougeL"],
+    }
+    
+    return results
 
+training_args = TrainingArguments(
+    output_dir=output_dir,
+    evaluation_strategy="steps",
+    eval_steps=args.eval_steps,
+    save_strategy="steps",
+    save_steps=args.save_steps,
+    learning_rate=args.learning_rate,
+    per_device_train_batch_size=args.batch_size,
+    per_device_eval_batch_size=args.batch_size,
+    num_train_epochs=args.epochs,
+    weight_decay=0.01,
+    warmup_steps=args.warmup_steps,
+    gradient_accumulation_steps=args.gradient_accumulation_steps,
+    logging_steps=10,
+    load_best_model_at_end=True,
+    metric_for_best_model="rougeL",
+    greater_is_better=True,
+    push_to_hub=False,
+    fp16=torch.cuda.is_available(),
+    report_to="tensorboard",
+)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=tokenized_datasets["train"],
+    eval_dataset=tokenized_datasets["validation"],
+    tokenizer=tokenizer,
+    data_collator=data_collator,
+    compute_metrics=compute_metrics,
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
+)
+
+print("Starting training...")
+trainer.train()
+
+print("Evaluating on test set...")
+test_results = trainer.evaluate(tokenized_datasets["test"])
+print(f"Test results: {test_results}")
+
+print("Saving final model...")
+trainer.save_model(os.path.join(output_dir, "final_model"))
+tokenizer.save_pretrained(os.path.join(output_dir, "final_model"))
+
+print("Saving best model...")
+model.save_pretrained(os.path.join(output_dir, "best_model"))
+tokenizer.save_pretrained(os.path.join(output_dir, "best_model"))
+
+print("Training complete!")

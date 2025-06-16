@@ -1,8 +1,28 @@
+# Core dependencies
 torch>=2.0.0
 transformers>=4.30.0
+peft>=0.4.0
+accelerate>=0.20.0
+bitsandbytes>=0.39.0  # For 8-bit and 4-bit quantization
+
+# Data processing
 datasets>=2.12.0
 pandas>=2.0.0
-tensorboard>=2.13.0
-peft>=0.4.0
 scikit-learn>=1.0.0
+numpy>=1.24.0
+
+# Evaluation
+evaluate>=0.4.0
+rouge-score>=0.1.2
+nltk>=3.8.0
+
+# Training utilities
+tensorboard>=2.13.0
 tqdm>=4.65.0
+
+# Logging and monitoring
+wandb>=0.15.0  # Optional for experiment tracking
+
+# Utilities
+sentencepiece>=0.1.99  # Required for some tokenizers
+protobuf>=3.20.0  # Compatibility with TensorBoard
