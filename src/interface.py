@@ -4,36 +4,82 @@ from peft import PeftModel
 import os
 
 class SymptomDiagnosisModel:
-    def __init__(self, model_path="../models/lora_adapter/best_model"):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.base_model = GPT2LMHeadModel.from_pretrained("gpt2").to(self.device)
-        self.model = PeftModel.from_pretrained(self.base_model, model_path).to(self.device)
+    def __init__(self):
+        # Get absolute path to model
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        model_path = os.path.join(project_root, "models", "lora_adapter", "best_model")
+        
+        # Force CPU and float32
+        self.device = "cpu"
+        torch.set_default_dtype(torch.float32)
+        
+        # Load tokenizer
         self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        
+        # Load base model
+        self.base_model = GPT2LMHeadModel.from_pretrained("gpt2")
+        self.base_model.config.pad_token_id = self.base_model.config.eos_token_id
+        
+        # Load adapter
+        self.model = PeftModel.from_pretrained(
+            self.base_model,
+            model_path,
+            is_trainable=False
+        )
         self.model.eval()
 
-    def predict(self, symptoms, max_length=32):
-        """
-        Predict diagnosis based on symptoms
-        """
+    def predict(self, symptoms):
+        """Predict diagnosis based on symptoms"""
         try:
-            inputs = self.tokenizer(symptoms, return_tensors="pt", truncation=True, max_length=128)
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            # Format input
+            input_text = f"Symptoms: {symptoms.strip()}\nDiagnosis: "
+            input_ids = self.tokenizer.encode(input_text, return_tensors="pt")
             
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    input_ids=inputs["input_ids"],
-                    max_length=max_length,
-                    num_return_sequences=1,
-                    no_repeat_ngram_size=2,
-                    temperature=0.7
-                )
+            # Generate tokens one at a time
+            max_new_tokens = 16
+            generated_text = input_text
             
-            prediction = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            return prediction.strip()
+            for _ in range(max_new_tokens):
+                    # Get model predictions
+                    with torch.no_grad():
+                        outputs = self.model(input_ids)
+                        logits = outputs.logits[:, -1, :]
+                        
+                        # Apply softmax to get probabilities
+                        probs = torch.nn.functional.softmax(logits, dim=-1)
+                        
+                        # Sample from top-k tokens
+                        top_k = 5
+                        top_k_probs, top_k_indices = torch.topk(probs, top_k)
+                        # Ensure dimensions match
+                        chosen_idx = top_k_indices[0][torch.multinomial(top_k_probs[0], 1).item()]
+                    
+                    # Convert to token and add to text
+                    new_token = self.tokenizer.decode([chosen_idx])  # Convert to list
+                    generated_text += new_token
+                    
+                    # Update input_ids for next iteration
+                    chosen_idx_tensor = torch.tensor([chosen_idx], dtype=torch.long).unsqueeze(0)  # Make it [1,1]
+                    input_ids = torch.cat([input_ids, chosen_idx], dim=1)
+                    
+                    # Stop if we generate a newline or period
+                    if new_token in ["\n", "."]:
+                        break
             
+            # Extract diagnosis
+            try:
+                diagnosis = generated_text.split("Diagnosis: ")[-1].strip()
+                if not diagnosis:
+                    return "No diagnosis generated"
+                return diagnosis
+            except:
+                return generated_text
+                
         except Exception as e:
             print(f"Error during prediction: {str(e)}")
-            return None
+            return "Error in prediction"
 
 def main():
     print("Loading model...")
