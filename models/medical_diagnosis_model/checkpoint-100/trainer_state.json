@@ -1,0 +1,124 @@
+{
+  "best_metric": 0.0,
+  "best_model_checkpoint": "/Users/connormcgraw/patient-symptom-assistant/models/medical_diagnosis_model/checkpoint-100",
+  "epoch": 0.8658008658008658,
+  "eval_steps": 100,
+  "global_step": 100,
+  "is_hyper_param_search": false,
+  "is_local_process_zero": true,
+  "is_world_process_zero": true,
+  "log_history": [
+    {
+      "epoch": 0.08658008658008658,
+      "grad_norm": 0.08225027471780777,
+      "learning_rate": 2.0000000000000003e-06,
+      "loss": 0.2358,
+      "step": 10
+    },
+    {
+      "epoch": 0.17316017316017315,
+      "grad_norm": 0.08615434914827347,
+      "learning_rate": 4.000000000000001e-06,
+      "loss": 0.2482,
+      "step": 20
+    },
+    {
+      "epoch": 0.2597402597402597,
+      "grad_norm": 0.1276925504207611,
+      "learning_rate": 6e-06,
+      "loss": 0.2097,
+      "step": 30
+    },
+    {
+      "epoch": 0.3463203463203463,
+      "grad_norm": 0.08142704516649246,
+      "learning_rate": 8.000000000000001e-06,
+      "loss": 0.283,
+      "step": 40
+    },
+    {
+      "epoch": 0.4329004329004329,
+      "grad_norm": 0.12362473458051682,
+      "learning_rate": 1e-05,
+      "loss": 0.2873,
+      "step": 50
+    },
+    {
+      "epoch": 0.5194805194805194,
+      "grad_norm": 0.1326175183057785,
+      "learning_rate": 1.2e-05,
+      "loss": 0.2501,
+      "step": 60
+    },
+    {
+      "epoch": 0.6060606060606061,
+      "grad_norm": 0.09426901489496231,
+      "learning_rate": 1.4e-05,
+      "loss": 0.2434,
+      "step": 70
+    },
+    {
+      "epoch": 0.6926406926406926,
+      "grad_norm": 0.10167495161294937,
+      "learning_rate": 1.6000000000000003e-05,
+      "loss": 0.2418,
+      "step": 80
+    },
+    {
+      "epoch": 0.7792207792207793,
+      "grad_norm": 0.13293589651584625,
+      "learning_rate": 1.8e-05,
+      "loss": 0.2288,
+      "step": 90
+    },
+    {
+      "epoch": 0.8658008658008658,
+      "grad_norm": 0.11225451529026031,
+      "learning_rate": 2e-05,
+      "loss": 0.196,
+      "step": 100
+    },
+    {
+      "epoch": 0.8658008658008658,
+      "eval_bleu": 0.0,
+      "eval_loss": 0.2325918823480606,
+      "eval_rouge1": 0.0,
+      "eval_rouge2": 0.0,
+      "eval_rougeL": 0.0,
+      "eval_runtime": 2073.7436,
+      "eval_samples_per_second": 0.055,
+      "eval_steps_per_second": 0.014,
+      "step": 100
+    }
+  ],
+  "logging_steps": 10,
+  "max_steps": 1150,
+  "num_input_tokens_seen": 0,
+  "num_train_epochs": 10,
+  "save_steps": 100,
+  "stateful_callbacks": {
+    "EarlyStoppingCallback": {
+      "args": {
+        "early_stopping_patience": 3,
+        "early_stopping_threshold": 0.0
+      },
+      "attributes": {
+        "early_stopping_patience_counter": 0
+      }
+    },
+    "TrainerControl": {
+      "args": {
+        "should_epoch_stop": false,
+        "should_evaluate": false,
+        "should_log": false,
+        "should_save": true,
+        "should_training_stop": false
+      },
+      "attributes": {}
+    }
+  },
+  "total_flos": 53254973030400.0,
+  "train_batch_size": 4,
+  "trial_name": null,
+  "trial_params": null
+}

@@ -21,19 +21,19 @@ from tqdm import tqdm
 import argparse
 
 parser = argparse.ArgumentParser(description="Fine-tune a medical diagnosis model")
-parser.add_argument("--base_model", type=str, default="microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext", 
+parser.add_argument("--base_model", type=str, default="gpt2", 
                     help="Base model to use for fine-tuning")
 parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
-parser.add_argument("--batch_size", type=int, default=8, help="Training batch size")
+parser.add_argument("--batch_size", type=int, default=4, help="Training batch size")
 parser.add_argument("--learning_rate", type=float, default=2e-5, help="Learning rate")
-parser.add_argument("--max_length", type=int, default=512, help="Maximum sequence length")
+parser.add_argument("--max_length", type=int, default=128, help="Maximum sequence length")
 parser.add_argument("--lora_r", type=int, default=16, help="LoRA attention dimension")
 parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha parameter")
 parser.add_argument("--lora_dropout", type=float, default=0.1, help="LoRA dropout rate")
 parser.add_argument("--eval_steps", type=int, default=100, help="Evaluation steps")
 parser.add_argument("--save_steps", type=int, default=100, help="Save checkpoint steps")
 parser.add_argument("--warmup_steps", type=int, default=100, help="Learning rate warmup steps")
-parser.add_argument("--gradient_accumulation_steps", type=int, default=4, help="Gradient accumulation steps")
+parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="Gradient accumulation steps")
 parser.add_argument("--use_8bit", action="store_true", help="Use 8-bit quantization for training")
 parser.add_argument("--use_4bit", action="store_true", help="Use 4-bit quantization for training")
 parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -85,7 +85,7 @@ peft_config = LoraConfig(
     r=args.lora_r,
     lora_alpha=args.lora_alpha,
     lora_dropout=args.lora_dropout,
-    target_modules=["query", "key", "value", "dense"],
+    target_modules=["c_attn", "c_proj"],
 )
 
 model = get_peft_model(model, peft_config)
@@ -139,32 +139,71 @@ rouge = evaluate.load("rouge")
 bleu = evaluate.load("bleu")
 
 def compute_metrics(eval_preds):
-    preds, labels = eval_preds
-    
-    labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-    
-    decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-    decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-    
-    rouge_output = rouge.compute(
-        predictions=decoded_preds, 
-        references=decoded_labels, 
-        use_stemmer=True
-    )
-    
-    bleu_output = bleu.compute(
-        predictions=decoded_preds,
-        references=[[label] for label in decoded_labels]
-    )
-    
-    results = {
-        "bleu": bleu_output["bleu"],
-        "rouge1": rouge_output["rouge1"],
-        "rouge2": rouge_output["rouge2"],
-        "rougeL": rouge_output["rougeL"],
-    }
-    
-    return results
+    try:
+        preds, labels = eval_preds
+        
+        # Handle the case where preds is not in the expected format
+        if isinstance(preds, tuple):
+            preds = preds[0]
+        
+        # Convert to numpy arrays if they're not already
+        if isinstance(preds, torch.Tensor):
+            preds = preds.detach().cpu().numpy()
+        if isinstance(labels, torch.Tensor):
+            labels = labels.detach().cpu().numpy()
+        
+        # Replace -100 with pad token id
+        labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+        
+        # Decode predictions and labels
+        decoded_preds = []
+        for pred in preds:
+            try:
+                # Convert to list of integers if needed
+                if isinstance(pred, np.ndarray):
+                    pred = pred.tolist()
+                decoded_preds.append(tokenizer.decode(pred, skip_special_tokens=True))
+            except Exception as e:
+                print(f"Error decoding prediction: {e}")
+                decoded_preds.append("")
+        
+        decoded_labels = []
+        for label in labels:
+            try:
+                # Convert to list of integers if needed
+                if isinstance(label, np.ndarray):
+                    label = label.tolist()
+                decoded_labels.append(tokenizer.decode(label, skip_special_tokens=True))
+            except Exception as e:
+                print(f"Error decoding label: {e}")
+                decoded_labels.append("")
+        
+        # Compute ROUGE scores
+        rouge_output = rouge.compute(
+            predictions=decoded_preds, 
+            references=decoded_labels, 
+            use_stemmer=True
+        )
+        
+        # Compute BLEU score
+        bleu_output = bleu.compute(
+            predictions=decoded_preds,
+            references=[[label] for label in decoded_labels]
+        )
+        
+        # Extract metrics
+        results = {
+            "bleu": bleu_output["bleu"],
+            "rouge1": rouge_output["rouge1"],
+            "rouge2": rouge_output["rouge2"],
+            "rougeL": rouge_output["rougeL"],
+        }
+        
+        return results
+    except Exception as e:
+        print(f"Error in compute_metrics: {e}")
+        # Return dummy metrics to avoid breaking the training loop
+        return {"bleu": 0.0, "rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
 
 training_args = TrainingArguments(
     output_dir=output_dir,

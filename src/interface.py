@@ -27,7 +27,7 @@ class MedicalDiagnosisAssistant:
                 model_path = os.path.join(project_root, "models", "medical_diagnosis_model", "best_model")
             
             if base_model is None:
-                base_model = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext"
+                base_model = "gpt2"
             
             logger.info(f"Loading model from {model_path}")
             logger.info(f"Using base model: {base_model}")
@@ -77,15 +77,18 @@ class MedicalDiagnosisAssistant:
             inputs = self.tokenizer(input_text, return_tensors="pt").to(self.device)
             
             with torch.no_grad():
+                # Extract attention_mask from inputs to avoid passing it twice
+                attention_mask = inputs.pop("attention_mask", None)
+                
                 outputs = self.model.generate(
-                    **inputs,
+                    input_ids=inputs["input_ids"],
+                    attention_mask=attention_mask,
                     max_new_tokens=max_length,
                     temperature=temperature,
                     top_p=top_p,
                     top_k=top_k,
                     do_sample=True,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                    attention_mask=inputs.get("attention_mask", None)
+                    pad_token_id=self.tokenizer.pad_token_id
                 )
             
             generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)

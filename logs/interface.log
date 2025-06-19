@@ -1,0 +1,11 @@
+2025-06-16 09:01:36,657 - INFO - Loading model from models/medical_diagnosis_model/best_model
+2025-06-16 09:01:36,661 - INFO - Using base model: gpt2
+2025-06-16 09:01:36,661 - INFO - Using device: cpu
+2025-06-16 09:01:37,244 - INFO - LoRA adapter loaded successfully
+2025-06-16 09:01:37,246 - INFO - Model loaded successfully
+2025-06-16 20:39:09,092 - ERROR - Error during prediction: peft.peft_model.PeftModelForCausalLM.generate() got multiple values for keyword argument 'attention_mask'
+2025-06-16 20:39:44,177 - INFO - Loading model from models/medical_diagnosis_model/best_model
+2025-06-16 20:39:44,183 - INFO - Using base model: gpt2
+2025-06-16 20:39:44,183 - INFO - Using device: cpu
+2025-06-16 20:39:44,816 - INFO - LoRA adapter loaded successfully
+2025-06-16 20:39:44,818 - INFO - Model loaded successfully
