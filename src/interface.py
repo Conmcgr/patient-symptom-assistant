@@ -35,32 +35,78 @@ class MedicalDiagnosisAssistant:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
             logger.info(f"Using device: {self.device}")
             
-            self.tokenizer = AutoTokenizer.from_pretrained(base_model)
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-            
-            model_kwargs = {}
-            if self.device == "cuda":
-                model_kwargs["torch_dtype"] = torch.float16
-            
-            self.base_model = AutoModelForCausalLM.from_pretrained(
-                base_model,
-                **model_kwargs
-            )
-            
-            if os.path.exists(model_path):
+            # Check if the model path exists first
+            if not os.path.exists(model_path):
+                logger.warning(f"Model path {model_path} not found. Using base model only.")
+                
+                # Load tokenizer and model directly
+                self.tokenizer = AutoTokenizer.from_pretrained(base_model)
+                if self.tokenizer.pad_token is None:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+                
+                model_kwargs = {}
+                if self.device == "cuda":
+                    model_kwargs["torch_dtype"] = torch.float16
+                
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    base_model,
+                    **model_kwargs
+                )
+            else:
+                # Load tokenizer from the adapter path if possible
+                try:
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+                    logger.info("Loaded tokenizer from adapter path")
+                except Exception as e:
+                    logger.warning(f"Could not load tokenizer from adapter path: {e}")
+                    self.tokenizer = AutoTokenizer.from_pretrained(base_model)
+                    logger.info("Loaded tokenizer from base model")
+                
+                if self.tokenizer.pad_token is None:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+                
+                # Load base model with appropriate configuration
+                model_kwargs = {}
+                if self.device == "cuda":
+                    model_kwargs["torch_dtype"] = torch.float16
+                
+                # Load the base model with lower precision to reduce memory usage
+                self.base_model = AutoModelForCausalLM.from_pretrained(
+                    base_model,
+                    low_cpu_mem_usage=True,  # Reduce memory usage
+                    **model_kwargs
+                )
+                
+            # Load the LoRA adapter with additional safety
+            try:
+                # Configure base model for better compatibility with LoRA
+                if hasattr(self.base_model, "config") and hasattr(self.base_model.config, "pad_token_id"):
+                    if self.base_model.config.pad_token_id is None:
+                        self.base_model.config.pad_token_id = self.tokenizer.pad_token_id
+                
+                # Try loading the model with safe parameters
                 self.model = PeftModel.from_pretrained(
                     self.base_model,
                     model_path,
-                    is_trainable=False
+                    is_trainable=False,
+                    device_map="auto" if torch.cuda.is_available() else None,
+                    torch_dtype=torch.float32  # Use full precision for stability
                 )
+                
                 logger.info("LoRA adapter loaded successfully")
-            else:
-                logger.warning(f"Model path {model_path} not found. Using base model only.")
+            except Exception as e:
+                logger.error(f"Error loading LoRA adapter: {e}")
+                logger.warning("Falling back to base model")
                 self.model = self.base_model
             
+            # Move model to device and set to evaluation mode
             self.model.to(self.device)
             self.model.eval()
+            
+            # Clear CUDA cache if using GPU
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
+                
             logger.info("Model loaded successfully")
             
         except Exception as e:
@@ -72,33 +118,98 @@ class MedicalDiagnosisAssistant:
         try:
             start_time = time.time()
             
-            input_text = f"Based on the following symptoms, provide a possible medical diagnosis:\n\nSymptoms: {symptoms.strip()}\n\nDiagnosis:"
+            # Sanitize input
+            symptoms = symptoms.strip()
+            if not symptoms:
+                return "No symptoms provided. Please describe your symptoms."
             
-            inputs = self.tokenizer(input_text, return_tensors="pt").to(self.device)
+            # Prepare the prompt with clear formatting
+            input_text = f"Based on the following symptoms, provide a possible medical diagnosis:\n\nSymptoms: {symptoms}\n\nDiagnosis:"
+            logger.info(f"Processing input: {input_text[:100]}...")
             
-            with torch.no_grad():
-                # Extract attention_mask from inputs to avoid passing it twice
-                attention_mask = inputs.pop("attention_mask", None)
+            # Tokenize with safety checks
+            try:
+                inputs = self.tokenizer(input_text, return_tensors="pt", truncation=True, 
+                                       max_length=512)  # Add truncation with reasonable max length
+                inputs = inputs.to(self.device)
+            except Exception as e:
+                logger.error(f"Tokenization error: {e}")
+                return "Error processing your symptoms. Please try again with a clearer description."
+            
+            # Generate with much more robust error handling
+            try:
+                # First, check if we can generate without raising errors
+                logger.info("Starting text generation")
                 
-                outputs = self.model.generate(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=attention_mask,
-                    max_new_tokens=max_length,
-                    temperature=temperature,
-                    top_p=top_p,
-                    top_k=top_k,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.pad_token_id
-                )
+                # Use minimal generation parameters to avoid issues
+                generation_config = {
+                    "input_ids": inputs["input_ids"],
+                    "attention_mask": inputs["attention_mask"],
+                    "max_new_tokens": 50,  # Start with very limited tokens
+                    "temperature": 1.0,  # Default temperature
+                    "do_sample": False,  # Deterministic generation is more stable
+                    "pad_token_id": self.tokenizer.pad_token_id
+                }
+                
+                # Try with minimal parameters first
+                with torch.no_grad():
+                    outputs = self.model.generate(**generation_config)
+                
+                logger.info("Basic generation succeeded, attempting with full parameters")
+                
+                # If basic generation succeeds, try with requested parameters
+                if temperature < 1.0 or top_p < 1.0 or top_k < 50:
+                    with torch.no_grad():
+                        outputs = self.model.generate(
+                            input_ids=inputs["input_ids"],
+                            attention_mask=inputs["attention_mask"],
+                            max_new_tokens=min(max_length, 100),  # Further limit tokens
+                            temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            do_sample=True,  # Only use sampling if parameters require it
+                            pad_token_id=self.tokenizer.pad_token_id,
+                            num_beams=1
+                        )
+                
+            except RuntimeError as e:
+                error_msg = str(e)
+                if "CUDA out of memory" in error_msg or "DefaultCPUAllocator: can't allocate memory" in error_msg:
+                    logger.error(f"Memory error during generation: {e}")
+                    # Clear cache if using GPU
+                    if self.device == "cuda":
+                        torch.cuda.empty_cache()
+                    return "Memory error occurred. Please try a shorter symptom description."
+                elif "bus error" in error_msg.lower() or "segmentation fault" in error_msg.lower():
+                    logger.error(f"Critical memory access error: {e}")
+                    return "A critical error occurred. The system may need to be restarted."
+                else:
+                    logger.error(f"Generation error: {e}")
+                    return "Error generating diagnosis. Technical details: " + error_msg[:100]
+            except Exception as e:
+                logger.error(f"Unexpected error during generation: {e}")
+                return f"Error generating diagnosis: {str(e)[:100]}"
             
-            generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            diagnosis = generated_text.split("Diagnosis:")[-1].strip()
-            
-            elapsed_time = time.time() - start_time
-            logger.info(f"Prediction generated in {elapsed_time:.2f} seconds")
-            
-            return diagnosis
+            # Decode with error handling
+            try:
+                generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+                
+                # Extract diagnosis
+                if "Diagnosis:" in generated_text:
+                    diagnosis = generated_text.split("Diagnosis:")[-1].strip()
+                    # Verify we have actual content
+                    if diagnosis and len(diagnosis) > 0:
+                        elapsed_time = time.time() - start_time
+                        logger.info(f"Prediction generated in {elapsed_time:.2f} seconds")
+                        return diagnosis
+                    else:
+                        return "Could not determine a specific diagnosis from the symptoms provided."
+                else:
+                    logger.warning("Generated text doesn't contain 'Diagnosis:' marker")
+                    return generated_text.strip()  # Return whatever was generated
+            except Exception as e:
+                logger.error(f"Error decoding or extracting diagnosis: {e}")
+                return "Error processing the diagnosis. Please try again."
             
         except Exception as e:
             logger.error(f"Error during prediction: {str(e)}")

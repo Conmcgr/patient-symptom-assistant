@@ -9,3 +9,17 @@
 2025-06-16 20:39:44,183 - INFO - Using device: cpu
 2025-06-16 20:39:44,816 - INFO - LoRA adapter loaded successfully
 2025-06-16 20:39:44,818 - INFO - Model loaded successfully
+2025-06-19 23:32:02,479 - INFO - Loading model from /Users/connormcgraw/patient-symptom-assistant/models/medical_diagnosis_model/best_model
+2025-06-19 23:32:02,479 - INFO - Using base model: gpt2
+2025-06-19 23:32:02,479 - INFO - Using device: cpu
+2025-06-19 23:32:03,077 - INFO - LoRA adapter loaded successfully
+2025-06-19 23:32:03,079 - INFO - Model loaded successfully
+2025-06-19 23:40:18,086 - INFO - Loading model from /Users/connormcgraw/patient-symptom-assistant/models/medical_diagnosis_model/best_model
+2025-06-19 23:40:18,087 - INFO - Using base model: gpt2
+2025-06-19 23:40:18,087 - INFO - Using device: cpu
+2025-06-19 23:40:18,134 - INFO - Loaded tokenizer from adapter path
+2025-06-19 23:40:18,740 - INFO - LoRA adapter loaded successfully
+2025-06-19 23:40:18,742 - INFO - Model loaded successfully
+2025-06-19 23:40:25,248 - INFO - Processing input: Based on the following symptoms, provide a possible medical diagnosis:
+
+Symptoms: I have a headache ...

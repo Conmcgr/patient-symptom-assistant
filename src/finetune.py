@@ -38,7 +38,7 @@ parser.add_argument("--use_8bit", action="store_true", help="Use 8-bit quantizat
 parser.add_argument("--use_4bit", action="store_true", help="Use 4-bit quantization for training")
 parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
-args = parser.parse_args([])
+args = parser.parse_args()
 
 torch.manual_seed(args.seed)
 np.random.seed(args.seed)
@@ -79,47 +79,81 @@ model = AutoModelForCausalLM.from_pretrained(
 if args.use_8bit or args.use_4bit:
     model = prepare_model_for_kbit_training(model)
 
+# Get the appropriate target modules for the model
+def get_target_modules(model_name):
+    """
+    Returns appropriate target modules based on model architecture
+    """
+    # Different models have different layer names
+    if "gpt2" in model_name.lower():
+        return ["c_attn", "c_proj"]
+    elif "bert" in model_name.lower() or "roberta" in model_name.lower():
+        return ["query", "key", "value"]
+    elif "llama" in model_name.lower() or "mistral" in model_name.lower():
+        return ["q_proj", "k_proj", "v_proj", "o_proj"]
+    elif "gemma" in model_name.lower():
+        return ["q_proj", "k_proj", "v_proj", "o_proj"]
+    else:
+        # Default to common target modules - will work for many models
+        return ["query", "key", "value", "dense"]
+
+target_modules = get_target_modules(args.base_model)
+print(f"Using target modules for LoRA: {target_modules}")
+
 peft_config = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
     inference_mode=False,
     r=args.lora_r,
     lora_alpha=args.lora_alpha,
     lora_dropout=args.lora_dropout,
-    target_modules=["c_attn", "c_proj"],
+    target_modules=target_modules,
 )
 
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
 
 def preprocess_function(examples):
-    prompts = [
-        f"{instruction}\n\nSymptoms: {input_text}\n\nDiagnosis:" 
-        for instruction, input_text in zip(examples["instruction"], examples["input"])
-    ]
-    
-    targets = [f" {output}" for output in examples["output"]]
-    
-    model_inputs = tokenizer(
-        prompts,
-        max_length=args.max_length,
-        padding="max_length",
-        truncation=True,
-    )
-    
-    labels = tokenizer(
-        targets,
-        max_length=args.max_length,
-        padding="max_length",
-        truncation=True,
-    )
-    
-    labels["input_ids"] = [
-        [(l if l != tokenizer.pad_token_id else -100) for l in label] 
-        for label in labels["input_ids"]
-    ]
-    
-    model_inputs["labels"] = labels["input_ids"]
-    return model_inputs
+    try:
+        prompts = [
+            f"{instruction}\n\nSymptoms: {input_text}\n\nDiagnosis:" 
+            for instruction, input_text in zip(examples["instruction"], examples["input"])
+        ]
+        
+        targets = [f" {output}" for output in examples["output"]]
+        
+        model_inputs = tokenizer(
+            prompts,
+            max_length=args.max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors=None,  # Ensure we don't get tensors at this stage
+        )
+        
+        labels = tokenizer(
+            targets,
+            max_length=args.max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors=None,  # Ensure we don't get tensors at this stage
+        )
+        
+        # Create label mask: -100 for padding tokens
+        labels["input_ids"] = [
+            [(l if l != tokenizer.pad_token_id else -100) for l in label] 
+            for label in labels["input_ids"]
+        ]
+        
+        model_inputs["labels"] = labels["input_ids"]
+        return model_inputs
+    except Exception as e:
+        print(f"Error in preprocessing: {e}")
+        # Return empty inputs to avoid breaking the pipeline
+        empty_input = {
+            "input_ids": [0] * args.max_length,
+            "attention_mask": [0] * args.max_length,
+            "labels": [-100] * args.max_length
+        }
+        return empty_input
 
 print("Processing datasets...")
 tokenized_datasets = dataset.map(

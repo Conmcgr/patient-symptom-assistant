@@ -1,0 +1,9 @@
+2025-06-19 23:44:10,450 - INFO - Loading base model: gpt2
+2025-06-19 23:44:10,450 - INFO - Using device: cpu
+2025-06-19 23:44:10,678 - INFO - Tokenizer loaded successfully
+2025-06-19 23:44:11,004 - INFO - Model loaded successfully
+2025-06-20 08:44:01,071 - INFO - Processing input: Based on the following symptoms, provide a possible medical diagnosis:
+
+Symptoms: I have a fever
+
+Di...

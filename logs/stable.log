@@ -1,0 +1,4 @@
+2025-06-20 08:44:50,005 - INFO - Loading symptom-to-diagnosis data...
+2025-06-20 08:44:50,019 - INFO - Loaded 1153 symptom-diagnosis pairs
+2025-06-20 08:44:50,020 - INFO - Created keyword index with 1449 keywords
+2025-06-20 08:44:50,020 - INFO - Initialization complete
